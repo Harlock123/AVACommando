@@ -79,7 +79,7 @@ public sealed partial class GameCanvas
 
     private bool InGame => Engine.State is GameState.Playing or GameState.Attract or GameState.Paused or GameState.GameOver;
 
-    private const uint Khaki = 0xFF8A9A4A, Enemy = 0xFF5A6A8A, Skin = 0xFFE0B080;
+    private const uint Skin = 0xFFE0B080;
 
     /// <summary>The colours of each kind of country: the ground, its flecks, the rocks, and the trees.</summary>
     private static readonly (uint Ground, uint Fleck, uint Rock, uint Tree)[] Themes =
@@ -289,59 +289,180 @@ public sealed partial class GameCanvas
         var p = Engine.Player;
         if (!p.Alive) return;
         if (p.Safe > 0 && (int)(_clock * 10) % 2 == 0) return;
-        DrawMan(dc, p.X, Sy(p.Y), -Field.AngleOf(p.Facing), p.Walk, Khaki, 0xFFD02A2A, true, 1.4);
+        DrawPerson(dc, p.X, Sy(p.Y), -Field.AngleOf(p.Facing), p.Walk, Look.Commando, 1.3);
     }
 
+    /// <summary>Who a figure is, for how he's dressed and what he carries.</summary>
+    private enum Look { Commando, Soldier, Grenadier, Officer, Prisoner }
+
     /// <summary>
-    /// A soldier from above: his shadow, his legs going as he runs, his body, his rifle, and his head (in a helmet,
-    /// or for the player, a red headband). Angles are on the screen, so up the map is -π/2.
+    /// A man as an arcade sprite draws him, seen from a little above: boots and legs striding as he runs, a body
+    /// with a belt, arms holding his rifle out the way he faces, and his head (a face when he's turned our way, the
+    /// back of his head when he's turned away). <paramref name="facing"/> is an angle on the screen, so up the
+    /// screen is -π/2; (x, y) is the middle of him, with his feet a little below.
     /// </summary>
-    private static void DrawMan(DrawingContext dc, double x, double y, double facing, double walk, uint body, uint head, bool rifle, double k)
+    private static void DrawPerson(DrawingContext dc, double x, double y, double facing, double walk, Look look, double k, bool seated = false, bool aiming = false)
     {
-        double c = Math.Cos(facing), s = Math.Sin(facing), stride = Math.Sin(walk * 14) * 6 * k;
-        dc.DrawEllipse(Brush(0x40000000), null, new Point(x + 3, y + 5), 10 * k, 8 * k);
-        foreach (int side in new[] { -1, 1 })
+        double fx = Math.Cos(facing), fy = Math.Sin(facing);
+        bool away = fy < -0.35, side = Math.Abs(fx) > 0.5;
+        var (shirt, trousers, arms) = look switch
         {
-            double lx = x - s * side * 4 * k, ly = y + c * side * 4 * k;
-            dc.DrawLine(Pen(0xFF3A3A2A, 3.5 * k), new Point(lx, ly), new Point(lx + c * stride * side, ly + s * stride * side));
+            Look.Commando => (0xFF6A7A3Au, 0xFF4A5A2Au, Skin),
+            Look.Grenadier => (0xFF7A6A4Au, 0xFF5A4A30u, 0xFF7A6A4Au),
+            Look.Officer => (0xFFE0DED0u, 0xFF3A3A40u, 0xFFE0DED0u),
+            Look.Prisoner => (0xFFE8E8E0u, 0xFF8A8A80u, Skin),
+            _ => (0xFF5A6A8Au, 0xFF3A4A62u, 0xFF5A6A8Au),
+        };
+        var dark = Pen(0xC0101010, 1);
+        if (!seated) dc.DrawEllipse(Brush(0x45000000), null, new Point(x + 1, y + 12 * k), 8.5 * k, 3.4 * k);
+        // The legs, stepping: forward and back when he's side on, up and down when he's facing us or away.
+        if (!seated)
+        {
+            double phase = Math.Sin(walk * 13);
+            foreach (int leg in new[] { -1, 1 })
+            {
+                double hx = x + leg * 2.6 * k, hy = y + 3 * k, footX, footY;
+                if (side)
+                {
+                    footX = hx + Math.Sign(fx) * leg * phase * 4 * k;
+                    footY = y + 11 * k - (leg * phase > 0 ? 1.2 * k : 0);
+                }
+                else
+                {
+                    footX = hx;
+                    footY = y + 11 * k - Math.Max(0, leg * phase) * 2.6 * k;
+                }
+                dc.DrawLine(Pen(trousers, 3.4 * k), new Point(hx, hy), new Point(footX, footY));
+                dc.DrawEllipse(Brush(0xFF2A2018), null, new Point(footX + (side ? fx * 0.8 * k : 0), footY + 0.6 * k), 2.3 * k, 1.5 * k);
+            }
         }
-        dc.DrawEllipse(Brush(body), Pen(0xFF202020, 1), new Point(x, y), 8 * k, 8 * k);
-        if (rifle) dc.DrawLine(Pen(0xFF2A2A2A, 3 * k), new Point(x + c * 2 - s * 5 * k, y + s * 2 + c * 5 * k), new Point(x + c * 16 * k - s * 5 * k, y + s * 16 * k + c * 5 * k));
-        dc.DrawEllipse(Brush(Skin), null, new Point(x + c * 1.5, y + s * 1.5), 4.6 * k, 4.6 * k);
-        dc.DrawEllipse(null, Pen(head, 2.2 * k), new Point(x + c * 1.5, y + s * 1.5), 4.6 * k, 4.6 * k);
-        if (head != 0xFFD02A2A) dc.DrawEllipse(Brush(head), null, new Point(x + c * 1.5, y + s * 1.5), 5 * k, 5 * k);
+        // Where his hands hold the gun, and the gun itself: behind him when he's facing away.
+        double gx = x + fx * 5 * k, gy = y - 1 * k + fy * 3.5 * k;
+        bool armed = look is Look.Commando or Look.Soldier;
+        void Rifle()
+        {
+            if (!armed) return;
+            var back = new Point(gx - fx * 5 * k, gy - fy * 5 * k + 1.5 * k);
+            var muzzle = new Point(gx + fx * (aiming ? 15 : 12) * k, gy + fy * (aiming ? 15 : 12) * k);
+            dc.DrawLine(Pen(0xFF5A3A1A, 3 * k), back, new Point(gx, gy));
+            dc.DrawLine(Pen(0xFF202020, 2.2 * k), new Point(gx, gy), muzzle);
+        }
+        if (away) Rifle();
+        // The body: a rounded tunic, a belt, and for the uniforms a strap across.
+        var body = new Rect(x - 5 * k, y - 6.5 * k, 10 * k, 10.5 * k);
+        dc.DrawRectangle(Brush(shirt), dark, body, 3 * k, 3 * k);
+        if (look == Look.Prisoner)
+            for (int i = 0; i < 3; i++) dc.DrawLine(Pen(0xFF6A6A70, 1.4 * k), new Point(x - 4.6 * k, y - 4 * k + i * 3 * k), new Point(x + 4.6 * k, y - 4 * k + i * 3 * k));
+        else
+        {
+            dc.FillRectangle(Brush(0xFF2A2418), new Rect(x - 5 * k, y + 1.4 * k, 10 * k, 1.8 * k));
+            if (look == Look.Officer) dc.DrawLine(Pen(0xFFC02A2A, 1.8 * k), new Point(x - 4.5 * k, y - 6 * k), new Point(x + 4.5 * k, y + 1.4 * k));
+            else if (!away) dc.DrawLine(Pen(Alpha(0xFF202020, 0.45), 1.2 * k), new Point(x - 4 * k, y - 5.5 * k), new Point(x + 3.5 * k, y + 1.4 * k));
+        }
+        // The arms: out to the gun (or, unarmed, at his sides; a grenadier's raised with one ready to throw).
+        var left = new Point(x - 4.6 * k, y - 4.5 * k);
+        var right = new Point(x + 4.6 * k, y - 4.5 * k);
+        if (armed)
+        {
+            dc.DrawLine(Pen(arms, 2.6 * k), left, new Point(gx - fx * 2 * k, gy - fy * 2 * k + 0.5 * k));
+            dc.DrawLine(Pen(arms, 2.6 * k), right, new Point(gx, gy));
+            dc.DrawEllipse(Brush(Skin), null, new Point(gx, gy), 1.4 * k, 1.4 * k);
+        }
+        else if (look == Look.Prisoner)
+        {
+            // Hands tied in front of him.
+            var tied = new Point(x, y);
+            dc.DrawLine(Pen(arms, 2.4 * k), left, tied);
+            dc.DrawLine(Pen(arms, 2.4 * k), right, tied);
+            dc.DrawLine(Pen(0xFF8A6A3A, 1.2 * k), new Point(x - 1.8 * k, y), new Point(x + 1.8 * k, y));
+        }
+        else if (look == Look.Grenadier && aiming)
+        {
+            dc.DrawLine(Pen(arms, 2.6 * k), left, new Point(x - 5 * k, y + 1 * k));
+            var up = new Point(x + 6 * k, y - 12 * k);
+            dc.DrawLine(Pen(arms, 2.6 * k), right, up);
+            dc.DrawEllipse(Brush(0xFF3A4A2A), dark, up, 2.2 * k, 2.2 * k);
+        }
+        else
+        {
+            double swing = Math.Sin(walk * 13) * 1.5 * k;
+            dc.DrawLine(Pen(arms, 2.6 * k), left, new Point(x - 5.6 * k, y + 1 * k + swing));
+            dc.DrawLine(Pen(arms, 2.6 * k), right, new Point(x + 5.6 * k, y + 1 * k - swing));
+        }
+        if (!away) Rifle();
+        // The head.
+        var head = new Point(x + fx * 0.6 * k, y - 10 * k);
+        dc.DrawEllipse(Brush(Skin), dark, head, 4.2 * k, 4.2 * k);
+        switch (look)
+        {
+            case Look.Commando:
+            {
+                // Dark hair, and a red headband with its tails streaming out behind.
+                dc.DrawEllipse(Brush(0xFF2A1A10), null, new Point(head.X, head.Y - (away ? 0.8 : 2) * k), 4.2 * k, (away ? 3.6 : 2.4) * k);
+                dc.DrawLine(Pen(0xFFD02A2A, 1.6 * k), new Point(head.X - 4.1 * k, head.Y - 1.2 * k), new Point(head.X + 4.1 * k, head.Y - 1.2 * k));
+                double wave = Math.Sin(walk * 9) * 1.5 * k, tx = side ? -Math.Sign(fx) : 0.6, ty = side ? 0 : 1;
+                var knot = new Point(head.X + tx * 3.8 * k, head.Y - 1.2 * k);
+                dc.DrawLine(Pen(0xFFD02A2A, 1.3 * k), knot, new Point(knot.X + tx * 6 * k, knot.Y + ty * 4 * k + wave));
+                dc.DrawLine(Pen(0xFFD02A2A, 1.3 * k), knot, new Point(knot.X + tx * 5 * k, knot.Y + ty * 5 * k + 2 * k - wave));
+                break;
+            }
+            case Look.Officer:
+                dc.DrawEllipse(Brush(0xFF3A3A40), null, new Point(head.X, head.Y - 3 * k), 4.8 * k, 2.4 * k);
+                dc.FillRectangle(Brush(0xFFC02A2A), new Rect(head.X - 4.2 * k, head.Y - 2.6 * k, 8.4 * k, 1.2 * k));
+                if (!away) dc.FillRectangle(Brush(0xFF101010), new Rect(head.X - 4.6 * k + fx * 1.5 * k, head.Y - 1.6 * k, 9.2 * k, 1.1 * k));
+                break;
+            case Look.Prisoner:
+                dc.DrawEllipse(Brush(Alpha(0xFF5A4A3A, 0.5)), null, new Point(head.X, head.Y - 2 * k), 3.8 * k, 2 * k);
+                break;
+            default:
+            {
+                // A helmet with its rim.
+                uint helmet = look == Look.Grenadier ? 0xFF4A4030 : 0xFF3A4A5A;
+                dc.DrawEllipse(Brush(helmet), dark, new Point(head.X, head.Y - 1.8 * k), 5.2 * k, (away ? 4.4 : 3.6) * k);
+                dc.DrawLine(Pen(Alpha(0xFF000000, 0.5), 1 * k), new Point(head.X - 5.2 * k, head.Y - 0.6 * k), new Point(head.X + 5.2 * k, head.Y - 0.6 * k));
+                break;
+            }
+        }
+        if (!away)
+        {
+            // The eyes: two looking at us, or one in profile.
+            if (side) dc.DrawEllipse(Brush(0xFF101010), null, new Point(head.X + fx * 2.6 * k, head.Y + 0.6 * k), 0.8 * k, 0.8 * k);
+            else
+                foreach (int e in new[] { -1, 1 })
+                    dc.DrawEllipse(Brush(0xFF101010), null, new Point(head.X + e * 1.6 * k + fx * k, head.Y + 0.6 * k), 0.75 * k, 0.75 * k);
+        }
     }
 
     private static void DrawSoldier(DrawingContext dc, SoldierKind kind, double x, double y, double facing, double walk, bool aiming, double k)
     {
         // The engine's angles have up the map positive; on the screen it's the other way.
         double f = -facing;
-        switch (kind)
-        {
-            case SoldierKind.Grenadier: DrawMan(dc, x, y, f, walk, 0xFF7A6A4A, 0xFF4A4030, false, k); break;
-            case SoldierKind.Officer: DrawMan(dc, x, y, f, walk, 0xFFD0D0C8, 0xFFB02A2A, false, k * 1.1); break;
-            default: DrawMan(dc, x, y, f, walk, Enemy, 0xFF3A4A5A, true, k); break;
-        }
-        if (aiming) dc.DrawEllipse(null, Pen(0x90FF4A3A, 1.2), new Point(x, y), 13 * k, 13 * k);
+        var look = kind switch { SoldierKind.Grenadier => Look.Grenadier, SoldierKind.Officer => Look.Officer, _ => Look.Soldier };
+        DrawPerson(dc, x, y, f, walk, look, look == Look.Officer ? k * 1.1 : k, aiming: aiming);
+        // A soldier about to fire: a glint at the muzzle, as warning.
+        if (aiming && look == Look.Soldier)
+            dc.DrawEllipse(Brush(0xC0FFF0A0), null, new Point(x + Math.Cos(f) * 17 * k, y - 1 * k + Math.Sin(f) * 18 * k), 2 * k, 2 * k);
     }
 
-    private static void DrawPrisoner(DrawingContext dc, double x, double y, double walk, bool free, double k)
-    {
-        DrawMan(dc, x, y, free ? Math.PI / 2 : 0, walk, 0xFFE8E8E0, 0xFF7A6A5A, false, k);
-        // Stripes on his shirt.
-        dc.DrawLine(Pen(0xFF5A5A5A, 1.5), new Point(x - 6 * k, y - 2), new Point(x + 6 * k, y - 2));
-        dc.DrawLine(Pen(0xFF5A5A5A, 1.5), new Point(x - 6 * k, y + 3), new Point(x + 6 * k, y + 3));
-    }
+    private static void DrawPrisoner(DrawingContext dc, double x, double y, double walk, bool free, double k) =>
+        DrawPerson(dc, x, y, free ? Math.PI / 2 : 0, walk, Look.Prisoner, k);
 
+    /// <summary>A motorbike and sidecar from the side, the rider and his passenger sat in it, both facing the way it's going.</summary>
     private static void DrawBike(DrawingContext dc, double x, double y, bool right)
     {
-        double d = right ? 1 : -1;
-        dc.DrawEllipse(Brush(0x40000000), null, new Point(x + 3, y + 8), 24, 12);
-        dc.DrawRectangle(Brush(0xFF4A5A3A), Pen(0xFF202020, 1), new Rect(x - 20, y - 6, 40, 12), 3, 3);
-        dc.DrawRectangle(Brush(0xFF5A6A4A), Pen(0xFF202020, 1), new Rect(x - 14, y + 6, 26, 14), 5, 5);
-        foreach (double wx in new[] { -16.0, 16.0 }) dc.DrawEllipse(Brush(0xFF202020), null, new Point(x + wx, y), 6, 4);
-        DrawMan(dc, x - d * 2, y - 2, right ? 0 : Math.PI, 0, Enemy, 0xFF3A4A5A, false, 0.9);
-        DrawMan(dc, x, y + 13, right ? 0 : Math.PI, 0, Enemy, 0xFF3A4A5A, false, 0.8);
+        double d = right ? 1 : -1, face = right ? 0 : Math.PI;
+        dc.DrawEllipse(Brush(0x45000000), null, new Point(x + 2, y + 14), 28, 7);
+        // The sidecar, behind the bike (further from us), then the bike.
+        dc.DrawRectangle(Brush(0xFF4A5A3A), Pen(0xFF202020, 1), new Rect(x - 16, y - 8, 30, 12), 6, 6);
+        DrawPerson(dc, x - d * 1, y - 10, face, 0, Look.Soldier, 0.85, seated: true);
+        foreach (double wx in new[] { -15.0, 15.0 })
+        {
+            dc.DrawEllipse(Brush(0xFF1A1A1A), Pen(0xFF5A5A5A, 1), new Point(x + wx, y + 9), 6.5, 6.5);
+            dc.DrawEllipse(Brush(0xFF7A7A7A), null, new Point(x + wx, y + 9), 1.8, 1.8);
+        }
+        Poly(dc, 0xFF5A6A4A, 0xFF202020, 1, new Point(x - 14, y + 4), new Point(x + 12, y + 4), new Point(x + 16 * d, y - 2), new Point(x - 10, y - 2));
+        dc.DrawLine(Pen(0xFF303030, 2), new Point(x + 12 * d, y - 2), new Point(x + 16 * d, y - 9));
+        DrawPerson(dc, x - d * 4, y - 6, face, 0, Look.Soldier, 0.95, seated: true);
     }
 
     private void DrawEffect(DrawingContext dc, Effect e)
@@ -385,7 +506,7 @@ public sealed partial class GameCanvas
         if (!InGame) return;
         Text(dc, $"AREA {g.Wave}  {g.Area.Name}", new Point(512, 14), 24, 0xFFB0D080, center: true);
         int spare = Math.Max(0, g.Lives - (g.Player.Alive ? 1 : 0));
-        for (int i = 0; i < Math.Min(spare, 6); i++) DrawMan(dc, 30 + i * 22, 40, -Math.PI / 2, 0, Khaki, 0xFFD02A2A, false, 0.7);
+        for (int i = 0; i < Math.Min(spare, 6); i++) DrawPerson(dc, 24 + i * 22, 38, Math.PI / 2, 0, Look.Commando, 0.6);
         // The grenades left.
         dc.DrawEllipse(Brush(0xFF3A5A2A), Pen(0xFF101010, 1), new Point(Field.Width - 90, 40), 6, 6);
         Text(dc, $"x {g.Player.Grenades}", new Point(Field.Width - 76, 40), 24, White);
@@ -422,9 +543,9 @@ public sealed partial class GameCanvas
         Text(dc, "AFTER THE 1985 ARCADE CLASSIC", new Point(cx, 180), 28, 0xFFB0C090, center: true);
         // The commando, running and firing up the screen.
         double x = cx + Math.Sin(_clock * 0.9) * 140;
-        DrawMan(dc, x, 262, -Math.PI / 2, _clock, Khaki, 0xFFD02A2A, true, 2.6);
+        DrawPerson(dc, x, 258, -Math.PI / 2, _clock, Look.Commando, 2.6);
         double shot = (_clock * 3) % 1;
-        dc.DrawEllipse(Brush(0xFFFFFFC0), null, new Point(x + 13, 214 - shot * 30), 4, 4);
+        dc.DrawEllipse(Brush(0xFFFFFFC0), null, new Point(x + 13, 216 - shot * 30), 4, 4);
         Text(dc, "FIGHT YOUR WAY UP THE MAP TO THE ENEMY HQ - GRENADES FLY OVER COVER", new Point(cx, 326), 24, White, center: true);
         (string Name, string Points, Action<double> Draw)[] legend =
         [
